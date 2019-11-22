@@ -43,8 +43,8 @@ class SpeedTestDevice:
 
         elapsed_seconds = end - start
         speed_bytes_per_second = total_size / elapsed_seconds
-        speed_kbps = speed_bytes_per_second / 1024.0
-        print(f"Received {total_size} bytes in {elapsed_seconds} seconds: {speed_bytes_per_second:.2f} b/s ({speed_kbps:.2f} kb/s)")
+        speed_Mbps = speed_bytes_per_second * 8 / 1e6
+        print(f"Received {total_size} bytes in {elapsed_seconds} seconds: {speed_bytes_per_second:.2f} B/s ({speed_Mbps:.2f} Mbps)")
 
 
 def main():
