@@ -1,11 +1,25 @@
 #include <PacketSerial.h>
+#include "frame_sender.h"
 
 PacketSerial s;
 
+enum PacketType
+{
+    PACKET_TYPE_NONE = 0,
+    PACKET_TYPE_LOG,
+    PACKET_TYPE_DATA,
+};
+
+LogPacket<PACKET_TYPE_LOG, 256> logPacket;
+
+struct packet_data_s
+{
+    uint32_t adc[8];
+};
+FramedPacket<PACKET_TYPE_DATA, packet_data_s> dataPacket;
+
 #define LED_PIN (13)
 #define MAX_CHUNK_SIZE (1024)
-
-#define MIN(a, b) (a > b ? b : a)
 
 enum test_state {
     TEST_STATE_NONE = 0,
@@ -15,14 +29,10 @@ enum test_state {
 enum test_state state = TEST_STATE_NONE;
 int rate = 0;
 int chunk_size = 0;
-unsigned char buf[MAX_CHUNK_SIZE];
 int last_micros = 0;
 
 void setup()
 {
-    // Initialize the buffer to an empty value
-    memset(buf, '0', sizeof(buf));
-
     // Configure serial and the LED
     s.begin(115200); // Baud is ignored on Teensy
     s.setPacketHandler(&handlePacket);
@@ -47,7 +57,8 @@ void loop()
         {
             if ((micros() - last_micros) > (1000000 / rate))
             {
-                s.send(buf, chunk_size);
+                dataPacket.m_data.data.adc[0] = 0xFF00FF00;
+                sendPacket(&dataPacket);
                 last_micros = micros();
             }
         }
@@ -57,6 +68,12 @@ void loop()
     case TEST_STATE_NONE:
         break;
     }
+}
+
+template <class T>
+void sendPacket(T *pkt)
+{
+    s.send(pkt->updateCRCAndGetBuffer(), pkt->getSize());
 }
 
 void handlePacket(const uint8_t *buf, size_t len)
@@ -81,12 +98,12 @@ void handlePacket(const uint8_t *buf, size_t len)
             int tx_chunk_size = atoi(tmp);
 
             rate = tx_rate;
-            chunk_size = MIN(tx_chunk_size, MAX_CHUNK_SIZE);
+            chunk_size = min(tx_chunk_size, MAX_CHUNK_SIZE);
             state = TEST_STATE_TRANSMIT;
             last_micros = micros();
 
-            snprintf(tmp, sizeof(tmp), "$TRANSMIT rate=%d chunk_size=%d", rate, chunk_size);
-            s.send(tmp, strnlen(tmp, sizeof(tmp)));
+            logPacket.printf("$TRANSMIT rate=%d chunk_size=%d", rate, chunk_size);
+            sendPacket(&logPacket);
         }
         break;
 
@@ -94,7 +111,8 @@ void handlePacket(const uint8_t *buf, size_t len)
         {
             state = TEST_STATE_NONE;
 
-            s.send("$NONE", 5);
+            logPacket.printf("$NONE");
+            sendPacket(&logPacket);
         }
         break;
 

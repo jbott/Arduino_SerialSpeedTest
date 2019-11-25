@@ -5,10 +5,13 @@ Speed test an attached Arduino's USB speed.
 import argparse
 import time
 import timeit
+import struct
 
 from cobs import cobs
 import serial
 
+uint16_t = struct.Struct("<H")
+uint32_t = struct.Struct("<I")
 
 parser = argparse.ArgumentParser(description="Speed test a serial port")
 parser.add_argument("test", choices=["transmit"], help="Which test to run")
@@ -36,6 +39,9 @@ class SpeedTestDevice:
         self.serial = serial
         self.packet = packet
         self._buf = bytearray()
+
+        if self.cmd("x") != "$NONE":
+            raise ValueError("Failed to initialize!")
 
     def send(self, buf):
         raw = buf.encode("ascii")
@@ -68,7 +74,16 @@ class SpeedTestDevice:
 
                 # If we've read a full packet, return it
                 try:
-                    yield cobs.decode(pkt)
+                    decoded = cobs.decode(pkt)
+                    packet_type = uint16_t.unpack(decoded[0:2])[0]
+                    packet_length = uint16_t.unpack(decoded[2:4])[0]
+                    packet_data = decoded[4:(4+packet_length)]
+                    # packet_crc32 = uint32_t.unpack(decoded[(4+packet_length):(4+packet_length+5)])[0]
+
+                    print(f"{packet_type}: {packet_data}")
+
+                    yield (packet_type, packet_data)
+
                     count += 1
                 except cobs.DecodeError:
                     # Try again
@@ -77,16 +92,12 @@ class SpeedTestDevice:
     def cmd(self, cmd):
         print("tx ->", cmd)
         self.send(cmd)
-        for p in self.read_packets():
-            if chr(p[0]) == "$":
-                ret = p.decode("ascii").strip()
+        for p_type, p_data in self.read_packets():
+            if p_type == 1:
+                ret = p_data.decode("ascii").strip()
                 break
-        # while True:
-        #     rx = self.read()
-        #     if rx and chr(rx[0]) == "$":
-        #         ret = rx.decode("ascii").strip()
-        #         break
         print("rx <-", ret)
+        return ret
 
     def transmit_test(self, rate, chunk_size, timeout=5.0):
         self.cmd(f"t{rate},{chunk_size}")
