@@ -1,22 +1,20 @@
-#include <PacketSerial.h>
-#include "frame_sender.h"
+#include "frame_serial.h"
 
-PacketSerial s;
+FrameSerial s;
 
 enum PacketType
 {
     PACKET_TYPE_NONE = 0,
+    PACKET_TYPE_CMD,
     PACKET_TYPE_LOG,
     PACKET_TYPE_DATA,
 };
 
-LogPacket<PACKET_TYPE_LOG, 256> logPacket;
-
 struct packet_data_s
 {
-    uint32_t adc[8];
-};
-FramedPacket<PACKET_TYPE_DATA, packet_data_s> dataPacket;
+    uint32_t timestamp;
+    uint32_t adc[32];
+} data;
 
 #define LED_PIN (13)
 #define MAX_CHUNK_SIZE (1024)
@@ -57,8 +55,11 @@ void loop()
         {
             if ((micros() - last_micros) > (1000000 / rate))
             {
-                dataPacket.m_data.data.adc[0] = 0xFF00FF00;
-                sendPacket(&dataPacket);
+                data.timestamp = micros();
+                data.adc[0] = 0xFF00FF00;
+
+                s.sendFrame(PACKET_TYPE_DATA, (const uint8_t*)&data, sizeof(data));
+
                 last_micros = micros();
             }
         }
@@ -70,31 +71,36 @@ void loop()
     }
 }
 
-template <class T>
-void sendPacket(T *pkt)
-{
-    s.send(pkt->updateCRCAndGetBuffer(), pkt->getSize());
-}
-
 void handlePacket(const uint8_t *buf, size_t len)
 {
-    if (len < 1)
+    // s.sendFrame(PACKET_TYPE_LOG, buf, len);
+    struct frame_s frame = { 0 };
+    if (!s.decodePacket(buf, len, &frame)) {
+        return;
+    }
+
+    if (frame.type != PACKET_TYPE_CMD) {
+        return;
+    }
+
+    if (frame.size < 1)
     {
         return;
     }
 
-    char c = buf[0];
+    uint8_t tmp[256];
+    char c = frame.data[0];
     switch (c)
     {
     case 't': // Transmit test
         {
             char tmp[64];
-            uint8_t *comma = memchr(buf, ',', len);
+            uint8_t *comma = memchr(frame.data, ',', len);
 
-            strlcpy(tmp, &buf[1], (comma - buf));
+            strlcpy(tmp, &frame.data[1], (comma - frame.data));
             int tx_rate = atoi(tmp);
 
-            strlcpy(tmp, &comma[1], (len - (comma - buf)));
+            strlcpy(tmp, &comma[1], (len - (comma - frame.data)));
             int tx_chunk_size = atoi(tmp);
 
             rate = tx_rate;
@@ -102,8 +108,8 @@ void handlePacket(const uint8_t *buf, size_t len)
             state = TEST_STATE_TRANSMIT;
             last_micros = micros();
 
-            logPacket.printf("$TRANSMIT rate=%d chunk_size=%d", rate, chunk_size);
-            sendPacket(&logPacket);
+            snprintf(tmp, sizeof(tmp), "$TRANSMIT rate=%d chunk_size=%d", rate, chunk_size);
+            s.sendFrame(PACKET_TYPE_LOG, tmp, strlen(tmp));
         }
         break;
 
@@ -111,8 +117,8 @@ void handlePacket(const uint8_t *buf, size_t len)
         {
             state = TEST_STATE_NONE;
 
-            logPacket.printf("$NONE");
-            sendPacket(&logPacket);
+            snprintf(tmp, sizeof(tmp), "$NONE");
+            s.sendFrame(PACKET_TYPE_LOG, tmp, strlen(tmp));
         }
         break;
 

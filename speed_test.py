@@ -2,6 +2,7 @@
 """
 Speed test an attached Arduino's USB speed.
 """
+from enum import IntEnum
 import argparse
 import time
 import timeit
@@ -9,6 +10,11 @@ import struct
 
 from cobs import cobs
 import serial
+
+class PacketType(IntEnum):
+    CMD = 1
+    LOG = 2
+    DATA = 3
 
 uint16_t = struct.Struct("<H")
 uint32_t = struct.Struct("<I")
@@ -45,8 +51,15 @@ class SpeedTestDevice:
 
     def send(self, buf):
         raw = buf.encode("ascii")
+
+        packet_type = uint16_t.pack(1)
+        packet_length = uint16_t.pack(len(raw))
+        crc32 = uint32_t.pack(0xDEADBEEF)
+
+        framed = packet_type + packet_length + raw + crc32;
+
         if self.packet:
-            pkt = cobs.encode(raw) + b"\0"
+            pkt = cobs.encode(framed) + b"\0"
 
         else:
             pkt = raw + b"\n"
@@ -80,8 +93,6 @@ class SpeedTestDevice:
                     packet_data = decoded[4:(4+packet_length)]
                     # packet_crc32 = uint32_t.unpack(decoded[(4+packet_length):(4+packet_length+5)])[0]
 
-                    print(f"{packet_type}: {packet_data}")
-
                     yield (packet_type, packet_data)
 
                     count += 1
@@ -93,7 +104,7 @@ class SpeedTestDevice:
         print("tx ->", cmd)
         self.send(cmd)
         for p_type, p_data in self.read_packets():
-            if p_type == 1:
+            if p_type == PacketType.LOG:
                 ret = p_data.decode("ascii").strip()
                 break
         print("rx <-", ret)
@@ -103,13 +114,19 @@ class SpeedTestDevice:
         self.cmd(f"t{rate},{chunk_size}")
 
         total_size = 0
+        deltas = []
         start = timeit.default_timer()
         while True:
             if self.packet:
-                for p in self.read_packets():
-                    total_size += len(p)
+                last_timestamp = None
+                for p_type, p_data in self.read_packets():
+                    timestamp = uint32_t.unpack(p_data[0:4])[0]
+                    if last_timestamp:
+                        deltas.append(timestamp - last_timestamp)
+                    total_size += len(p_data)
                     if (timeit.default_timer() - start) > timeout:
                         break
+                    last_timestamp = timestamp
             else:
                 ret = self.read(chunk_size)
                 if ret:
@@ -126,6 +143,7 @@ class SpeedTestDevice:
         print(
             f"Received {total_size} bytes in {elapsed_seconds} seconds: {speed_bytes_per_second:.2f} B/s ({speed_Mbps:.2f} Mbps)"
         )
+        print(f"Average delta {sum(deltas)/len(deltas)} uS")
 
 
 def main():
